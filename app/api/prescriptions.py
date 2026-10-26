@@ -8,7 +8,8 @@ from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/consultations", tags=["Prescriptions"])
 
-@router.post("/{consultation_id}/prescriptions", response_model=PrescriptionResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post("/{consultation_id}/prescriptions", response_model=PrescriptionResponse, status_code=201)
 def create_prescription(
     consultation_id: str,
     rx_in: PrescriptionCreate,
@@ -16,85 +17,41 @@ def create_prescription(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
-    if not consultation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Consultation not found"
-        )
+    c = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Consultation not found")
 
-    is_doctor = current_user.doctor_profile and consultation.doctor_id == current_user.doctor_profile.id
-    is_admin = current_user.role == "admin"
+    is_doctor = current_user.doctor_profile and c.doctor_id == current_user.doctor_profile.id
+    if not (is_doctor or current_user.role == "admin"):
+        raise HTTPException(status_code=403, detail="Only the attending doctor can write prescriptions")
 
-    if not (is_doctor or is_admin):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the attending doctor can create prescriptions for this consultation"
-        )
+    if c.status == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot prescribe for a cancelled consultation")
 
-    if consultation.status == "cancelled":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot issue a prescription for a cancelled consultation"
-        )
+    if db.query(Prescription).filter(Prescription.consultation_id == consultation_id).first():
+        raise HTTPException(status_code=400, detail="A prescription already exists for this consultation")
 
-    existing_rx = db.query(Prescription).filter(Prescription.consultation_id == consultation_id).first()
-    if existing_rx:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A prescription has already been issued for this consultation"
-        )
-
-    prescription = Prescription(
-        consultation_id=consultation_id,
-        diagnosis=rx_in.diagnosis,
-        medicines=rx_in.medicines,
-        instructions=rx_in.instructions
-    )
-    db.add(prescription)
+    rx = Prescription(consultation_id=consultation_id, diagnosis=rx_in.diagnosis, medicines=rx_in.medicines, instructions=rx_in.instructions)
+    db.add(rx)
     db.commit()
-    db.refresh(prescription)
+    db.refresh(rx)
 
-    client_ip = request.client.host if request.client else None
-    record_audit(
-        db=db,
-        action="ISSUE_PRESCRIPTION",
-        resource=f"prescription:{prescription.id}",
-        actor_id=current_user.id,
-        details=f"Prescription created for consultation {consultation_id}",
-        ip_address=client_ip
-    )
+    record_audit(db, "ISSUE_PRESCRIPTION", f"prescription:{rx.id}", actor_id=current_user.id, ip_address=request.client.host if request.client else None)
+    return rx
 
-    return prescription
 
 @router.get("/{consultation_id}/prescriptions", response_model=PrescriptionResponse)
-def get_prescription(
-    consultation_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
-    if not consultation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Consultation not found"
-        )
+def get_prescription(consultation_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    c = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Consultation not found")
 
-    is_patient = consultation.patient_id == current_user.id
-    is_doctor = current_user.doctor_profile and consultation.doctor_id == current_user.doctor_profile.id
-    is_admin = current_user.role == "admin"
+    is_patient = c.patient_id == current_user.id
+    is_doctor = current_user.doctor_profile and c.doctor_id == current_user.doctor_profile.id
+    if not (is_patient or is_doctor or current_user.role == "admin"):
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    if not (is_patient or is_doctor or is_admin):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to view this prescription"
-        )
-
-    prescription = db.query(Prescription).filter(Prescription.consultation_id == consultation_id).first()
-    if not prescription:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No prescription found for this consultation"
-        )
-
-    return prescription
+    rx = db.query(Prescription).filter(Prescription.consultation_id == consultation_id).first()
+    if not rx:
+        raise HTTPException(status_code=404, detail="No prescription found")
+    return rx

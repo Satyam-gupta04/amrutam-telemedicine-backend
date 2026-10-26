@@ -28,13 +28,11 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     else:
         expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 def decode_access_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload
+        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except jwt.PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -44,23 +42,14 @@ def decode_access_token(token: str) -> dict:
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     payload = decode_access_token(token)
-    user_id: str = payload.get("sub")
-    if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
-        )
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
-        )
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
     return user
 
 def require_roles(allowed_roles: List[str]):
@@ -84,13 +73,12 @@ def verify_mfa_code(secret: str, code: str) -> bool:
     for offset in [0, -1, 1]:
         interval_bytes = str(current_interval + offset).encode("utf-8")
         h = hmac.new(secret.encode("utf-8"), interval_bytes, hashlib.sha256).hexdigest()
-        generated_code = str(int(h[:6], 16) % 1000000).zfill(6)
-        if hmac.compare_digest(generated_code, code.strip()):
+        generated = str(int(h[:6], 16) % 1000000).zfill(6)
+        if hmac.compare_digest(generated, code.strip()):
             return True
     return False
 
 def get_current_mfa_code(secret: str) -> str:
-    current_interval = int(time.time() // 30)
-    interval_bytes = str(current_interval).encode("utf-8")
+    interval_bytes = str(int(time.time() // 30)).encode("utf-8")
     h = hmac.new(secret.encode("utf-8"), interval_bytes, hashlib.sha256).hexdigest()
     return str(int(h[:6], 16) % 1000000).zfill(6)
