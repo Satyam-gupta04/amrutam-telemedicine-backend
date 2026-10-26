@@ -132,9 +132,6 @@ class ConsultationResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class ConsultationStatusUpdate(BaseModel):
-    status: str = Field(..., pattern="^(booked|in_progress|completed|cancelled)$")
-    meet_link: Optional[str] = None
 
 class AuditLogResponse(BaseModel):
     id: str
